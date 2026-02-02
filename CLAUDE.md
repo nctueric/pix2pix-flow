@@ -18,6 +18,7 @@ pix2pix-flow/
 ├── graphics.py           # Image grid visualization (numpy -> PNG)
 ├── utils.py              # JSON result logging, npy-to-image conversion
 ├── memory_saving_gradients.py  # Gradient checkpointing for memory efficiency
+├── rl_scheduler.py       # RL-based hyperparameter scheduler (REINFORCE + baseline)
 ├── requirements.txt      # Python dependencies
 │
 ├── data_loaders/         # Dataset loading modules
@@ -124,7 +125,34 @@ All configuration is via command-line arguments to `train.py` (no config files).
 | Optimizer | `--lr`, `--optimizer` (adam/adamax), `--beta1`, `--weight_decay`, `--epochs_warmup` | LR warmup is linear |
 | Data | `--problem`, `--data_dir`, `--dal` (augmentation level), `--n_batch_train` | dal=0 means no augmentation |
 | Pix2Pix | `--joint_train`, `--code_loss_type`, `--code_loss_scale`, `--mle_loss_scale` | joint_train enables dual-model training |
+| RL Schedule | `--rl_schedule`, `--rl_policy_lr`, `--rl_action_bound`, `--rl_lr_{min,max}`, `--rl_code_scale_{min,max}`, `--rl_mle_scale_{min,max}` | Dynamically tunes lr, code_loss_scale, mle_loss_scale via RL |
 | Checkpoint | `--logdir`, `--restore_path_A`, `--restore_path_B` | Best model saved as `model_{A,B}_best_loss.ckpt` |
+
+## RL-Based Hyperparameter Scheduling
+
+When `--rl_schedule` is enabled, a REINFORCE policy gradient agent dynamically adjusts `lr`, `code_loss_scale`, and `mle_loss_scale` during training. The agent:
+
+- **Observes**: train losses (A, B), code loss, validation losses, current HP values, epoch progress
+- **Acts**: outputs log-multiplier adjustments to each hyperparameter (clipped to `±rl_action_bound`)
+- **Reward**: improvement in combined validation loss between epochs
+- **Updates**: every 10 validation epochs via REINFORCE with a learned linear baseline
+
+The loss scale placeholders use `tf.placeholder_with_default`, so without `--rl_schedule` the graph uses the static `hps` values with zero overhead.
+
+```bash
+# Example: RL-scheduled training
+mpiexec -n 4 python train.py \
+  --problem edges2shoes --joint_train \
+  --image_size 32 --n_level 3 --depth 32 \
+  --flow_permutation 2 --flow_coupling 1 \
+  --learntop --lr 0.001 --n_bits_x 8 \
+  --rl_schedule \
+  --rl_action_bound 0.2 \
+  --rl_lr_min 1e-5 --rl_lr_max 5e-3 \
+  --logdir ./logs-rl
+```
+
+Agent state is saved to `rl_scheduler.json` in `--logdir` and auto-restored on resume.
 
 ## Output Artifacts
 
@@ -133,6 +161,7 @@ Training produces in `--logdir`:
 - `train_A.txt`, `train_B.txt` - training logs (JSON lines)
 - `test_A.txt`, `test_B.txt` - validation logs
 - `*_epoch_*_sample_*.png` - generated sample images
+- `rl_scheduler.json` - RL agent state (if `--rl_schedule` enabled)
 
 ## Code Conventions
 

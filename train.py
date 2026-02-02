@@ -175,17 +175,43 @@ def main(hps):
                         train_iterators, test_iterators, data_inits)
     # Initialize visualization functions
     visualise = init_visualizations(hps, logdir, model)
+    # Initialize RL scheduler if enabled
+    rl_scheduler = None
+    if hps.rl_schedule and not hps.inference:
+        from rl_scheduler import HyperparameterScheduler
+        rl_scheduler = HyperparameterScheduler(
+            base_lr=hps.lr,
+            base_code_loss_scale=hps.code_loss_scale,
+            base_mle_loss_scale=hps.mle_loss_scale,
+            lr_range=(hps.rl_lr_min, hps.rl_lr_max),
+            code_scale_range=(hps.rl_code_scale_min, hps.rl_code_scale_max),
+            mle_scale_range=(hps.rl_mle_scale_min, hps.rl_mle_scale_max),
+            policy_lr=hps.rl_policy_lr,
+            action_bound=hps.rl_action_bound,
+            seed=hps.seed,
+        )
+        rl_scheduler.set_total_epochs(hps.epochs)
+        # Restore scheduler state if available
+        rl_sched_path = os.path.join(logdir, 'rl_scheduler.json')
+        if os.path.exists(rl_sched_path):
+            rl_scheduler.load(rl_sched_path)
+            if hvd.rank() == 0:
+                _print("Restored RL scheduler from", rl_sched_path)
+
     if not hps.inference:
-        train(sess, model, hps, logdir, visualise)
+        train(sess, model, hps, logdir, visualise, rl_scheduler=rl_scheduler)
     else:
         iterators = {'A': test_iterator_A, 'B': test_iterator_B}
         infer(sess, model, hps, iterators, hps.full_test_its)
 
 
-def train(sess, model, hps, logdir, visualise):
+def train(sess, model, hps, logdir, visualise, rl_scheduler=None):
     _print(hps)
     _print('Starting training. Logging to', logdir)
     _print('epoch n_processed n_images ips dtrain dtest dsample dtot train_results test_results msg')
+
+    if rl_scheduler is not None:
+        _print('RL hyperparameter scheduling ENABLED')
 
     # Train
     sess.graph.finalize()
@@ -193,6 +219,10 @@ def train(sess, model, hps, logdir, visualise):
     n_images = 0
     train_time = 0.0
     test_loss_best = {'A': 999999, 'B': 999999}
+
+    # Current dynamic hyperparams (may be overridden by RL scheduler)
+    dynamic_code_loss_scale = hps.code_loss_scale
+    dynamic_mle_loss_scale = hps.mle_loss_scale
 
     if hvd.rank() == 0:
         train_logger = {'A': ResultLogger(logdir + "train_A.txt", **hps.__dict__),
@@ -207,13 +237,24 @@ def train(sess, model, hps, logdir, visualise):
         for it in range(hps.train_its):
 
             # Set learning rate, linearly annealed from 0 in the first hps.epochs_warmup epochs.
-            lr = hps.lr * min(1., n_processed /
-                              (hps.n_train * hps.epochs_warmup))
+            if rl_scheduler is not None:
+                # RL scheduler controls the base LR; still apply warmup
+                lr = rl_scheduler.current_lr * min(1., n_processed /
+                                                   (hps.n_train * hps.epochs_warmup))
+            else:
+                lr = hps.lr * min(1., n_processed /
+                                  (hps.n_train * hps.epochs_warmup))
 
             # Run a training step synchronously.
             _t = time.time()
             x_A, y_A, x_B, y_B = model.get_train_data()
-            train_results_A, train_results_B = model.train(lr, x_A, y_A, x_B, y_B)
+            if rl_scheduler is not None:
+                train_results_A, train_results_B = model.train(
+                    lr, x_A, y_A, x_B, y_B,
+                    _code_loss_scale=dynamic_code_loss_scale,
+                    _mle_loss_scale=dynamic_mle_loss_scale)
+            else:
+                train_results_A, train_results_B = model.train(lr, x_A, y_A, x_B, y_B)
             train_results['A'] += [train_results_A]
             train_results['B'] += [train_results_B]
             if hps.verbose and hvd.rank() == 0:
@@ -269,6 +310,25 @@ def train(sess, model, hps, logdir, visualise):
                         test_loss_best['B'] = test_results['B'][0]
                         model.save_B(logdir+"model_B_best_loss.ckpt")
                         msg['B'] += ' *'
+
+            # RL scheduler step: update hyperparams based on validation results
+            if rl_scheduler is not None and epoch % hps.epochs_full_valid == 0:
+                # train_results: [loss, bits_x, bits_y, pred_loss, code_loss]
+                val_loss_A = test_results['A'][0] if isinstance(test_results['A'], np.ndarray) else 999.0
+                val_loss_B = test_results['B'][0] if isinstance(test_results['B'], np.ndarray) else 999.0
+                new_hps = rl_scheduler.step(
+                    train_loss_A=float(train_results['A'][0]),
+                    train_loss_B=float(train_results['B'][0]),
+                    code_loss=float(train_results['A'][4]),
+                    val_loss_A=float(val_loss_A),
+                    val_loss_B=float(val_loss_B),
+                )
+                dynamic_code_loss_scale = new_hps['code_loss_scale']
+                dynamic_mle_loss_scale = new_hps['mle_loss_scale']
+                if hvd.rank() == 0:
+                    _print("[RL] lr={:.6f} code_scale={:.4f} mle_scale={:.4f}".format(
+                        new_hps['lr'], new_hps['code_loss_scale'], new_hps['mle_loss_scale']))
+                    rl_scheduler.save(logdir + "rl_scheduler.json")
 
             dtest = time.time() - t
 
@@ -469,5 +529,26 @@ if __name__ == "__main__":
                         help="Scalar that is used to time the code_loss")
     parser.add_argument("--mle_loss_scale", type=float, default=1.0,
                         help="Scalar that is used to time the bits_x")
+
+    # RL-based hyperparameter scheduling
+    parser.add_argument("--rl_schedule", action="store_true",
+                        help="Enable RL-based dynamic hyperparameter scheduling")
+    parser.add_argument("--rl_policy_lr", type=float, default=0.01,
+                        help="Learning rate for the RL policy network")
+    parser.add_argument("--rl_action_bound", type=float, default=0.3,
+                        help="Max absolute log-multiplier per RL step")
+    parser.add_argument("--rl_lr_min", type=float, default=1e-6,
+                        help="Min learning rate for RL schedule")
+    parser.add_argument("--rl_lr_max", type=float, default=1e-2,
+                        help="Max learning rate for RL schedule")
+    parser.add_argument("--rl_code_scale_min", type=float, default=0.01,
+                        help="Min code_loss_scale for RL schedule")
+    parser.add_argument("--rl_code_scale_max", type=float, default=100.0,
+                        help="Max code_loss_scale for RL schedule")
+    parser.add_argument("--rl_mle_scale_min", type=float, default=0.01,
+                        help="Min mle_loss_scale for RL schedule")
+    parser.add_argument("--rl_mle_scale_max", type=float, default=100.0,
+                        help="Max mle_loss_scale for RL schedule")
+
     hps = parser.parse_args()  # So error if typo
     main(hps)

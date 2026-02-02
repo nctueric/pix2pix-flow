@@ -81,11 +81,17 @@ def abstract_model_xy(sess, hps, feeds, train_iterators, test_iterators, data_in
             m.train_B = _train_B
         m.polyak_swap_B = lambda: sess.run(polyak_swap_op_B)
 
-    def _train(_lr, _x_A, _y_A, _x_B, _y_B):
+    def _train(_lr, _x_A, _y_A, _x_B, _y_B,
+               _code_loss_scale=None, _mle_loss_scale=None):
+        feed = {feeds['x_A']: _x_A, feeds['y_A']: _y_A,
+                feeds['x_B']: _x_B, feeds['y_B']: _y_B,
+                lr: _lr}
+        if _code_loss_scale is not None:
+            feed[feeds['code_loss_scale']] = _code_loss_scale
+        if _mle_loss_scale is not None:
+            feed[feeds['mle_loss_scale']] = _mle_loss_scale
         return sess.run([train_op_A, train_op_B, stats_train_A, stats_train_B],
-                        {feeds['x_A']: _x_A, feeds['y_A']: _y_A,
-                         feeds['x_B']: _x_B, feeds['y_B']: _y_B,
-                         lr: _lr})[-2:]
+                        feed)[-2:]
     m.train = _train
 
     # === Testing
@@ -229,6 +235,11 @@ def model(sess, hps, train_iterators, test_iterators, data_inits):
         Y_B = tf.placeholder(tf.int32, [None], name='label_B')
         # learning rate
         lr = tf.placeholder(tf.float32, None, name='learning_rate')
+        # Dynamic loss scales (for RL-based scheduling)
+        code_loss_scale_ph = tf.placeholder_with_default(
+            float(hps.code_loss_scale), shape=[], name='code_loss_scale')
+        mle_loss_scale_ph = tf.placeholder_with_default(
+            float(hps.mle_loss_scale), shape=[], name='mle_loss_scale')
 
     with tf.variable_scope('A'):
         encoder_A, decoder_A = codec(hps)
@@ -367,12 +378,12 @@ def model(sess, hps, train_iterators, test_iterators, data_inits):
             x_A, y_A, x_B, y_B = X_A, Y_A, X_B, Y_B
 
         bits_x_A, bits_y_A, pred_loss_A, eps_flatten_A, bits_x_B, bits_y_B, pred_loss_B, eps_flatten_B, code_loss = _f_loss(x_A, y_A, x_B, y_B, is_training, reuse, init)
-        local_loss_A = hps.mle_loss_scale * bits_x_A + hps.weight_y * bits_y_A
-        local_loss_B = hps.mle_loss_scale * bits_x_B + hps.weight_y * bits_y_B
+        local_loss_A = mle_loss_scale_ph * bits_x_A + hps.weight_y * bits_y_A
+        local_loss_B = mle_loss_scale_ph * bits_x_B + hps.weight_y * bits_y_B
         # Add code difference loss
         if hps.joint_train:
-            local_loss_A += hps.code_loss_scale * code_loss
-            local_loss_B += hps.code_loss_scale * code_loss
+            local_loss_A += code_loss_scale_ph * code_loss
+            local_loss_B += code_loss_scale_ph * code_loss
 
         stats_A = [local_loss_A, bits_x_A, bits_y_A, pred_loss_A, code_loss]
         stats_B = [local_loss_B, bits_x_B, bits_y_B, pred_loss_B, code_loss]
@@ -386,7 +397,9 @@ def model(sess, hps, train_iterators, test_iterators, data_inits):
         else:
             return tf.reduce_mean(local_loss_A), global_stats_A, tf.reduce_mean(local_loss_B), global_stats_B
 
-    feeds = {'x_A': X_A, 'y_A': Y_A, 'x_B': X_B, 'y_B': Y_B}
+    feeds = {'x_A': X_A, 'y_A': Y_A, 'x_B': X_B, 'y_B': Y_B,
+             'code_loss_scale': code_loss_scale_ph,
+             'mle_loss_scale': mle_loss_scale_ph}
     m = abstract_model_xy(sess, hps, feeds, train_iterators,
                           test_iterators, data_inits, lr, f_loss)
 
