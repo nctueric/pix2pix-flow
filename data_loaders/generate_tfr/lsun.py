@@ -38,7 +38,7 @@ import os.path
 import numpy
 import skimage.transform
 from PIL import Image
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import numpy as np
 from tqdm import tqdm
 

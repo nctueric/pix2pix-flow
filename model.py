@@ -1,10 +1,10 @@
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 import tfops as Z
 import optim
 import numpy as np
 import horovod.tensorflow as hvd
-from tensorflow.contrib.framework.python.ops import add_arg_scope
+from tfops import add_arg_scope
 
 
 '''
@@ -270,7 +270,7 @@ def model(sess, hps, train_iterators, test_iterators, data_inits):
             eps_A.append(z_A)
 
             # Loss of eps and flatten latent code from another model
-            eps_flatten_A = tf.concat([tf.contrib.layers.flatten(e) for e in eps_A], axis=-1)
+            eps_flatten_A = tf.concat([tf.reshape(e, [tf.shape(e)[0], -1]) for e in eps_A], axis=-1)
 
         with tf.variable_scope('model_B', reuse=reuse):
             y_onehot_B = tf.cast(tf.one_hot(y_B, hps.n_y, 1, 0), 'float32')
@@ -295,7 +295,7 @@ def model(sess, hps, train_iterators, test_iterators, data_inits):
             eps_B.append(z_B)
 
             # Loss of eps and flatten latent code from another model
-            eps_flatten_B = tf.concat([tf.contrib.layers.flatten(e) for e in eps_B], axis=-1)
+            eps_flatten_B = tf.concat([tf.reshape(e, [tf.shape(e)[0], -1]) for e in eps_B], axis=-1)
 
         code_loss = 0.0
         code_shapes = [[16, 16, 6], [8, 8, 12], [4, 4, 48]]

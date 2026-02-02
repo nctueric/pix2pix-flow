@@ -32,7 +32,7 @@ def shard(data, shards, rank):
 
 def get_data(problem, shards, rank, data_augmentation_level, n_batch_train, n_batch_test, n_batch_init, resolution, flip_color=False, code_path=None):
     if problem == 'mnist':
-        from keras.datasets import mnist
+        from tensorflow.keras.datasets import mnist
         (x_train, y_train), (x_test, y_test) = mnist.load_data()
         y_train = np.reshape(y_train, [-1])
         y_test = np.reshape(y_test, [-1])
@@ -57,7 +57,7 @@ def get_data(problem, shards, rank, data_augmentation_level, n_batch_train, n_ba
         x_test_Y = 255.0 - x_test_X
         y_test_Y = y_test_X
     elif problem == 'cifar10':
-        from keras.datasets import cifar10
+        from tensorflow.keras.datasets import cifar10
         (x_train, y_train), (x_test, y_test) = cifar10.load_data()
         y_train = np.reshape(y_train, [-1])
         y_test = np.reshape(y_test, [-1])
@@ -75,7 +75,7 @@ def get_data(problem, shards, rank, data_augmentation_level, n_batch_train, n_ba
 
     print('n_shard_train:', x_train_X.shape[0], 'n_shard_test:', x_test_X.shape[0])
 
-    from keras.preprocessing.image import ImageDataGenerator
+    from tensorflow.keras.preprocessing.image import ImageDataGenerator
     datagen_test = ImageDataGenerator()
     if data_augmentation_level == 0:
         datagen_train = ImageDataGenerator()

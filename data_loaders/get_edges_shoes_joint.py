@@ -73,7 +73,7 @@ def get_data(problem, shards, rank, data_augmentation_level, n_batch_train,
 
     print('n_shard_train:', x_train_A.shape[0], 'n_shard_test:', x_test_A.shape[0])
 
-    from keras.preprocessing.image import ImageDataGenerator
+    from tensorflow.keras.preprocessing.image import ImageDataGenerator
     datagen_test = ImageDataGenerator()
     if data_augmentation_level == 0:
         datagen_train = ImageDataGenerator()

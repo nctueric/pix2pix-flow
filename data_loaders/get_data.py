@@ -1,5 +1,5 @@
 import os
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import numpy as np
 import glob
 
@@ -34,8 +34,9 @@ def input_fn(tfr_file, shards, rank, pmap, fmap, n_batch, resolution, rnd_crop, 
     if is_training:
         # shuffle order of files in shard
         files = files.shuffle(buffer_size=_FILES_SHUFFLE)
-    dset = files.apply(tf.contrib.data.parallel_interleave(
-        tf.data.TFRecordDataset, cycle_length=fmap))
+    dset = files.interleave(
+        tf.data.TFRecordDataset, cycle_length=fmap,
+        num_parallel_calls=fmap)
     if is_training:
         dset = dset.shuffle(buffer_size=n_batch * _SHUFFLE_FACTOR)
     dset = dset.repeat()

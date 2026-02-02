@@ -55,10 +55,10 @@ Loss_B = MLE_loss_B + code_loss_scale * ||code_A - code_B||^2
 
 ## Dependencies
 
-- **TensorFlow 1.8** (GPU, uses tf.contrib extensively)
-- **Horovod 0.13.8** (distributed training via MPI/allreduce)
-- **Keras 2.2.0** (dataset loading only)
-- **Pillow 5.2.0**, **toposort 1.5**, NumPy, SciPy
+- **TensorFlow >= 2.12** (runs in compat.v1 mode via `tf.disable_v2_behavior()`)
+- **Horovod >= 0.28** (distributed training via MPI/allreduce)
+- **Pillow >= 9.0**, **toposort >= 1.7**, NumPy, SciPy
+- **Optional**: `tensorflow-graph-editor` for memory-saving gradient checkpointing
 
 ## Common Commands
 
@@ -138,16 +138,23 @@ Training produces in `--logdir`:
 
 - **Functional style**: minimal OOP, heavy use of nested functions and closures
 - **Naming**: lowercase_with_underscores; `_A`/`_B` suffixes for domain-specific tensors; `z` for latent, `x` for images, `eps` for noise, `hps` for hyperparameters
-- **Imports**: `import tfops as Z` is used throughout; data loaders imported conditionally based on `--problem`
-- **TF patterns**: `tf.variable_scope` for namespacing, `@add_arg_scope` decorators, `hvd.rank() == 0` guards for master-only operations
+- **Imports**: `import tensorflow.compat.v1 as tf` in all TF files; `import tfops as Z` is used throughout; data loaders imported conditionally based on `--problem`
+- **TF patterns**: `tf.variable_scope` for namespacing, `@add_arg_scope` decorators (local impl in `tfops.py`), `hvd.rank() == 0` guards for master-only operations
 - **Logging**: only rank 0 prints/logs; JSON-line format via `ResultLogger`
 - **No test suite**: no pytest/unittest infrastructure exists; validation happens during training
 
 ## Development Notes
 
-- The codebase targets **TensorFlow 1.x** and uses `tf.contrib` heavily (not compatible with TF 2.x without migration)
+- The codebase uses **TensorFlow 2.x** in **compat.v1 mode** (`import tensorflow.compat.v1 as tf` + `tf.disable_v2_behavior()`). This preserves the original graph-based session execution model while running on modern TF.
+- All `tf.contrib` dependencies have been removed:
+  - `tf.contrib.framework.arg_scope` / `add_arg_scope` replaced with local implementations in `tfops.py`
+  - `tf.contrib.layers.flatten` replaced with `tf.reshape`
+  - `tf.contrib.data.parallel_interleave` replaced with `Dataset.interleave(num_parallel_calls=...)`
+  - `tf.contrib.graph_editor` (used by `memory_saving_gradients.py`) gracefully falls back to standard `tf.gradients` if unavailable; install `tensorflow-graph-editor` package for memory-efficient gradient checkpointing
+  - `tf.contrib.learn` import removed (was unused)
+- Keras imports use `tensorflow.keras` (not standalone `keras` package)
+- Horovod allreduce uses the public `hvd.allreduce(x, op=hvd.Sum)` API instead of private `hvd.mpi_ops._allreduce`
 - Distributed training requires MPI (`mpiexec`/`mpirun`) and Horovod
-- `memory_saving_gradients.py` patches TF's gradient computation to reduce VRAM usage - imported and activated in `train.py`
 - The `DEBUG` flag in `train.py` is set to `True` by default for activation statistics printing
 - Data is expected in `--data_dir` with dataset-specific subdirectory structure (e.g., `edges2shoes_32/train/A.npy`)
 - `.gitignore` excludes `logs/`, `logs-*/`, `tmp/`, `*.npy` - never commit model weights or large data files

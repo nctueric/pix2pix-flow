@@ -6,13 +6,13 @@ import os
 import sys
 import time
 
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
+
 import horovod.tensorflow as hvd
 import numpy as np
-import tensorflow as tf
 import graphics
 from utils import ResultLogger
-
-learn = tf.contrib.learn
 
 # Surpress verbose warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'

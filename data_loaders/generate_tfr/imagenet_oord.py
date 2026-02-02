@@ -34,7 +34,7 @@ import os.path
 import scipy.io
 import scipy.io.wavfile
 import scipy.ndimage
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import numpy as np
 from tqdm import tqdm
 

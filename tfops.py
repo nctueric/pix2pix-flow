@@ -1,8 +1,66 @@
-import tensorflow as tf
-from tensorflow.contrib.framework.python.ops import add_arg_scope, arg_scope
-from tensorflow.contrib.layers import variance_scaling_initializer
+import tensorflow.compat.v1 as tf
 import numpy as np
 import horovod.tensorflow as hvd
+import threading
+from functools import wraps
+
+# ============================================================
+# Replacements for tf.contrib.framework.arg_scope / add_arg_scope
+# (removed in TF2)
+# ============================================================
+
+_ARGSCOPE_STACK = threading.local()
+
+
+def _get_arg_scope_stack():
+    if not hasattr(_ARGSCOPE_STACK, 'stack'):
+        _ARGSCOPE_STACK.stack = [{}]
+    return _ARGSCOPE_STACK.stack
+
+
+class arg_scope:
+    """Replacement for tf.contrib.framework.arg_scope.
+
+    Usage:
+        with arg_scope([fn1, fn2], kwarg1=val1):
+            fn1(...)  # kwarg1=val1 is injected as default
+    """
+
+    def __init__(self, fns, **kwargs):
+        if not isinstance(fns, (list, tuple)):
+            fns = [fns]
+        self._updates = {id(fn): kwargs for fn in fns}
+
+    def __enter__(self):
+        stack = _get_arg_scope_stack()
+        new_scope = dict(stack[-1])
+        for fn_id, kw in self._updates.items():
+            existing = new_scope.get(fn_id, {})
+            new_scope[fn_id] = {**existing, **kw}
+        stack.append(new_scope)
+        return self
+
+    def __exit__(self, *args):
+        _get_arg_scope_stack().pop()
+        return False
+
+    def __bool__(self):
+        # Support `if arg_scope(...)` pattern (always truthy)
+        return True
+
+
+def add_arg_scope(fn):
+    """Replacement for tf.contrib.framework.add_arg_scope decorator."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        stack = _get_arg_scope_stack()
+        scope = stack[-1]
+        defaults = scope.get(id(wrapper), {})
+        if defaults:
+            merged = {**defaults, **kwargs}
+            return fn(*args, **merged)
+        return fn(*args, **kwargs)
+    return wrapper
 
 # Debugging function
 do_print_act_stats = True
@@ -29,7 +87,7 @@ def print_act_stats(x, _str=""):
 def allreduce_sum(x):
     if hvd.size() == 1:
         return x
-    return hvd.mpi_ops._allreduce(x)
+    return hvd.allreduce(x, op=hvd.Sum)
 
 
 def allreduce_mean(x):
@@ -321,8 +379,8 @@ def upsample2d_nearest_neighbour(x):
     width = int(shape[2])
     n_channels = int(shape[3])
     x = tf.reshape(x, (n_batch, height, 1, width, 1, n_channels))
-    x = tf.concat(2, [x, x])
-    x = tf.concat(4, [x, x])
+    x = tf.concat([x, x], 2)
+    x = tf.concat([x, x], 4)
     x = tf.reshape(x, (n_batch, height*2, width*2, n_channels))
     return x
 

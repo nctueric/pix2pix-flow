@@ -26,7 +26,7 @@ from __future__ import print_function
 
 import os
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import numpy as np
 from tqdm import tqdm
 from typing import Iterable
@@ -168,8 +168,9 @@ def dump_celebahq(data_dir, tfrecord_dir, max_res, split, write):
         if split:
             tfr_files = get_tfr_files(data_dir, split, int(np.log2(max_res)))
             files = tf.data.Dataset.list_files(tfr_files)
-            dset = files.apply(tf.contrib.data.parallel_interleave(
-                tf.data.TFRecordDataset, cycle_length=_NUM_PARALLEL_FILE_READERS))
+            dset = files.interleave(
+                tf.data.TFRecordDataset, cycle_length=_NUM_PARALLEL_FILE_READERS,
+                num_parallel_calls=_NUM_PARALLEL_FILE_READERS)
             transpose = False
         else:
             tfr_file = get_tfr_file(data_dir, "", int(np.log2(max_res)))
@@ -223,8 +224,9 @@ def dump_imagenet(data_dir, tfrecord_dir, max_res, split, write):
 
         files = files.shuffle(buffer_size=_NUM_FILES[split])
 
-        dataset = files.apply(tf.contrib.data.parallel_interleave(
-            tf.data.TFRecordDataset, cycle_length=_NUM_PARALLEL_FILE_READERS))
+        dataset = files.interleave(
+            tf.data.TFRecordDataset, cycle_length=_NUM_PARALLEL_FILE_READERS,
+            num_parallel_calls=_NUM_PARALLEL_FILE_READERS)
 
         dataset = dataset.shuffle(buffer_size=_SHUFFLE_BUFFER)
         parse_fn = parse_image(max_res)

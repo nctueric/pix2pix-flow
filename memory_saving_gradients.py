@@ -1,16 +1,42 @@
 from toposort import toposort
 import contextlib
 import numpy as np
-import tensorflow as tf
-import tensorflow.contrib.graph_editor as ge
+import tensorflow.compat.v1 as tf
 import time
 import sys
+import warnings
+
 sys.setrecursionlimit(10000)
 # refers back to current module if we decide to split helpers out
 util = sys.modules[__name__]
 
+# Try to import graph_editor (removed from tf.contrib in TF2)
+_HAS_GRAPH_EDITOR = False
+ge = None
+try:
+    import tensorflow.contrib.graph_editor as ge
+    _HAS_GRAPH_EDITOR = True
+except (ImportError, AttributeError):
+    pass
+
+if not _HAS_GRAPH_EDITOR:
+    try:
+        # Try standalone package: pip install tensorflow-graph-editor
+        import graph_editor as ge
+        _HAS_GRAPH_EDITOR = True
+    except ImportError:
+        warnings.warn(
+            "graph_editor not available (removed in TF2). "
+            "Memory-saving gradients will fall back to standard tf.gradients. "
+            "Install 'tensorflow-graph-editor' package for memory-efficient "
+            "gradient checkpointing."
+        )
+
 # getting rid of "WARNING:tensorflow:VARIABLES collection name is deprecated"
-setattr(tf.GraphKeys, "VARIABLES", "variables")
+try:
+    setattr(tf.GraphKeys, "VARIABLES", "variables")
+except AttributeError:
+    pass
 
 # save original gradients since tf.gradient could be monkey-patched to point
 # to our version
@@ -56,6 +82,10 @@ def gradients(ys, xs, grad_ys=None, checkpoints='collection', **kwargs):
                         (currently using a very simple strategy that identifies a number of bottleneck tensors in the graph to checkpoint)
             - 'collection': look for a tensorflow collection named 'checkpoints', which holds the tensors to checkpoint
     '''
+
+    # Fall back to standard gradients if graph_editor is not available
+    if not _HAS_GRAPH_EDITOR:
+        return tf_gradients(ys, xs, grad_ys, **kwargs)
 
     #    print("Calling memsaving gradients with", checkpoints)
     if not isinstance(ys, list):
